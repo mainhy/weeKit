@@ -21,11 +21,13 @@
   var addEvent = 'addEventListener'
   var s = 'querySelector'
   var sa = s + 'All'
+  var getBCR = 'getBoundingClientRect'
   var int = W.parseInt
   var float = W.parseFloat
   var div = D.createElement('div')
   var docEle = D.documentElement
   var checkableRe = /radio|checkbox/i
+  var addPx = ['top', 'right', 'bottom', 'left', 'width', 'height', 'minWidth', 'minHeight', 'maxWidth', 'maxHeight', 'fontSize']
 
   function isWindow (x) { return !!x && x === x.window }
   function isSelf (x) { return x instanceof Q }
@@ -36,6 +38,9 @@
       else return isType(o) === type.toLowerCase()
     }
   })
+  function funcArg (context, arg, idx, payload) {
+    return _.Fun(arg) ? arg.call(context, idx, payload) : arg
+  }
   function parseHTML (str) {
     var tmp = D.implementation.createHTMLDocument()
     tmp.body.innerHTML = str
@@ -55,13 +60,13 @@
     var matches = ele && (ele.matches || ele.webkitMatchesSelector || ele.msMatchesSelector)
     return !!matches && isSelector(selector) && matches.call(ele, selector)
   }
-  function isValid (el) {
-    if (typeof el === 'object') {
-      Object.keys(el).length > 0 ? map.call(el, function (e) { div.appendChild(e) }) : div.appendChild(el)
+  function isValid (el, arg, idx, payload) {
+    if (typeof arg === 'object') {
+      Object.keys(arg).length > 0 ? map.call(arg, function (e) { div.appendChild(e) }) : div.appendChild(arg)
       var divInner = div.innerHTML
       div.textContent = ''
     }
-    return (_.Fun(el) ? el() : _.Str(divInner) ? divInner : el)
+    return _.Str(divInner) ? divInner : funcArg(el, arg, idx, payload)
   }
   function getStyle (el, prop) {
     return (el.currentStyle ? el.currentStyle : (W.getComputedStyle ? W.getComputedStyle(el, null) : el.style))[prop]
@@ -78,22 +83,12 @@
     }
   }
 
-  function goStyle (obj, name, value, extra) {
-    if (obj.length > 0) {
-      // Check name is array for inner/outer of width & height
-      var getSize = float(_.Arr(obj[0][name]) ? (obj[0][name]).join('') : getStyle(obj[0], name))
-      var extraSize = _.Arr(extra) && extra.reduce(function (total, val) {
-        total += float(getStyle(obj[0], val))
-        return total
-      }, 0)
-      return _.Und(value) ? getSize
-        : (value === true && _.Arr(extra) ? (getSize + extraSize) // FOR outerWidth & outerHeight
-          : each(obj, function (i, el) {
-            name = _.Arr(name) ? name[1].toLowerCase() : name
-            value = (value === 'showToggle' ? (getStyle(el, 'display') !== 'none' ? 'none' : 'block') : value)
-            el.style[name] = value
-          }))
-    }
+  function goStyle (obj, name, value) {
+    if (!obj.length) return
+    return _.Und(value) ? getStyle(obj[0], name) : each(obj, function (i, el) {
+      var addSufix = Q.inArray(name, addPx) ? 'px' : ''
+      el.style[name] = funcArg(el, value, i, getStyle(el, name)) + addSufix
+    })
   }
 
   function goTo (obj, prop, selector, deep, until) {
@@ -101,7 +96,7 @@
     var compare = until && getCompare(until)
     map.call(obj, function (el, i) {
       if (_.Fun(prop) || prop === children) {
-        push.apply(group, _.Fun(prop) ? prop(el) : el[prop])
+        push.apply(group, _.Fun(prop) ? prop(el) : filter.call(el[prop], function (el) { return isMatches(el, selector || '*') }))
       } else {
         el = el[prop]
         while (el !== null) {
@@ -137,22 +132,28 @@
     return obj
   }
   function extend (target) {
-    var i, property, result
-    for (i = 1; i < arguments.length; i++) {
-      if (_.Obj(arguments[i])) {
-        for (property in arguments[i]) {
-          if ({}.hasOwnProperty.call(arguments[i], property)) { result[property] = arguments[i][property] }
-        }
-      }
+    var deep; var args = slice.call(arguments, 1)
+    if (_.Boo(target)) {
+      deep = target
+      target = args.shift()
     }
-    return result
+    args.forEach(function (arg) {
+      for (var key in arg) {
+        if (deep && (isPlainObject(arg[key]) || _.Arr(arg[key]))) {
+          if (isPlainObject(arg[key]) && !isPlainObject(target[key])) { target[key] = {} }
+          if (_.Arr(arg[key]) && !_.Arr(target[key])) { target[key] = [] }
+          extend(target[key], arg[key], deep)
+        } else if (!_.Und(arg[key])) target[key] = arg[key]
+      }
+    })
+    return target
   }
   function ready (callback) {
     return D.readyState !== 'loading' ? callback() : D[addEvent]('DOMContentLoaded', callback)
   }
 
   function Init (el, context) { // el = selector, dom element or function
-    push.apply(this, el && el.nodeType ? [el] : _.Str(el) ? (isSelector(el) ? (isSelf(context) ? context[0] : D[s](context) || D)[sa](el) : parseHTML(el)) : el)
+    push.apply(this, el && (el.nodeType || el === W) ? [el] : _.Str(el) ? (isSelector(el) ? (isSelf(context) ? context[0] : D[s](context) || D)[sa](el) : parseHTML(el)) : el)
   }
   function Q (el, context) { // el = selector, dom element or function
     return _.Fun(el) ? ready(el) : new Init(el, context)
@@ -211,34 +212,20 @@
     index: function (selector) {
       return indexOf.call(_.Und(selector) ? this[0].parentNode.children : this, _.Und(selector) ? this[0] : Q(selector)[0])
     },
-    extend: function (plugins) {
-      return extend(Q.fn, plugins)
-    },
     size: function () {
       return this.length
     },
 
     // /////////*  ATTRIBUTES GROUP  *//////////////// //
     css: function (name, value) {
-      if (_.Obj(name)) {
-        for (var prop in name) {
-          goStyle(this, prop, name[prop])
-        }
-        return this
-      } else {
-        return goStyle(this, name, value)
-      }
-    },
-
-    // /////////*  EFFECTS GROUP  *//////////////// //
-    hide: function () {
-      return goStyle(this, 'display', 'none')
-    },
-    show: function () {
-      return goStyle(this, 'display', 'initial')
-    },
-    toggle: function () {
-      return goStyle(this, 'display', 'showToggle')
+      var self = this
+      var group = {}
+      if (_.Str(name)) return goStyle(self, name, value)
+      each(name, function (prop, val) {
+        if (_.Obj(name)) goStyle(self, prop, val)
+        else group[val] = goStyle(self, val) // An array of one or more CSS properties.
+      })
+      return (_.Obj(name)) ? this : group
     },
 
     // /////////*  MANIPULATION GROUP  *//////////////// //
@@ -353,30 +340,9 @@
       })
     },
 
-    // /////////*  DIMENSIONS GROUP  *//////////////// //
-    width: function (value) {
-      return goStyle(this, 'width', value)
-    },
-    innerWidth: function (value) {
-      return goStyle(this, ['client', 'Width'], value)
-    },
-    outerWidth: function (value) {
-      return goStyle(this, ['offset', 'Width'], value, ['marginLeft', 'marginRight'])
-    },
-    height: function (value) {
-      return goStyle(this, 'height', value)
-    },
-    innerHeight: function (value) {
-      return goStyle(this, ['client', 'Height'], value)
-    },
-    outerHeight: function (value) {
-      return goStyle(this, ['offset', 'Height'], value, ['marginTop', 'marginBottom'])
-    },
-
     // /////////*  OFFSETS GROUP  *//////////////// //
     position: function () {
-      if (this[0]) return
-      return {
+      return this[0] && {
         left: float(this[0].offsetLeft),
         top: float(this[0].offsetTop)
       }
@@ -415,10 +381,10 @@
   // //////////////////////// //
   // *  MANIPULATION GROUP  * //
   // /////////////////////// //
-  each({ after: 'afterend', prepend: 'afterbegin', before: 'beforebegin', append: 'beforeend' }, function (type, position) {
+  each({ append: 'beforeend', prepend: 'afterbegin', after: 'afterend', before: 'beforebegin' }, function (type, position) {
     Q.fn[type] = function (html) {
-      return _.Und(html) ? this : each(this, function (i, el) {
-        el.insertAdjacentHTML(position, isValid(html))
+      return _.Und(html) ? this : each(this, function (idx, el) {
+        el.insertAdjacentHTML(position, isValid(el, html, idx, el[position]))
       })
     }
     // 'appendTo', 'prependTo', 'insertBefore', 'insertAfter'
@@ -429,8 +395,8 @@
   })
   each({ text: 'textContent', html: 'innerHTML' }, function (type, position) {
     Q.fn[type] = function (value) {
-      return _.Und(value) ? this[0][position] : each(this, function (i, el) {
-        el[position] = isValid(value)
+      return _.Und(value) ? this[0][position] : each(this, function (idx, el) {
+        el[position] = isValid(el, value, idx, el[position])
       })
     }
   })
@@ -441,22 +407,20 @@
   each(['has', 'add', 'remove', 'toggle'], function (i, type) {
     Q.fn[type + 'Class'] = function (className) {
       if (type === 'has' && _.Str(className)) return this[0].classList.contains(className)
-      else {
-        className = _.Str(className) ? className.split(/\s+/) : className
-        return this.each(function (i, el) {
-          el.classList[type].apply(el.classList, className)
-        })
-      }
+      return this.each(function (idx, el) {
+        el.classList[type].apply(el.classList, _.Arr(className) ? className.map(function (str) { return str.replace(/\s/g, '') }) : funcArg(el, className, idx, el.className).split(/\s+/))
+      })
     }
   })
   each({ attr: ['get', 'set'], removeAttr: 'remove', hasAttr: ['has'], data: ['get', 'set'] }, function (type, prop) {
+    var dataAttr = (type === 'data' ? 'data-' : '')
     Q.fn[type] = function (name, value) {
-      if (_.Und(value) && _.Arr(prop)) return this[0][prop[0] + 'Attribute']((type === 'data' ? 'data-' : '') + name)
-      else {
-        return this.each(function (i, el) {
-          el[(_.Arr(prop) && prop[1] ? prop[1] : prop) + 'Attribute']((type === 'data' ? 'data-' : '') + name, value)
-        })
-      }
+      if (_.Str(name) && _.Und(value) && _.Arr(prop)) return this[0][prop[0] + 'Attribute'](dataAttr + name)
+      return this.each(function (i, el) {
+        var isProp = (_.Arr(prop) && prop[1] ? prop[1] : prop) + 'Attribute'
+        if (_.Obj(name)) each(name, function (id, val) { el[isProp](dataAttr + id, val) })
+        else el[isProp](dataAttr + name, funcArg(el, value, i, el.getAttribute(dataAttr + name)))
+      })
     }
   })
 
@@ -492,8 +456,39 @@
       return this
     }
   }
+  each({ 'show': 'block', 'hide': 'none', 'toggle': [] }, function (type, prop) {
+    Q.fn[type] = function (duration) {
+      this.css({ 'visibility': 'initial', 'opacity': 1 })
+      this.each(function (i, el) {
+        el.style.display = _.Arr(prop) ? (getStyle(el, 'display') !== 'none' ? 'none' : 'block') : prop
+      })
+    }
+  })
+
+  // //////////////////////// //
+  // *  DIMENSIONS GROUP  * //
+  // /////////////////////// //
+  each(['Width', 'Height'], function (id, prop) {
+    var property = prop.toLowerCase()
+    Q.fn[property] = function (value) {
+      var el = this[0]
+      if (_.Und(value)) {
+        return isWindow(el) ? el['inner' + prop]
+          : _.Doc(el) ? el.documentElement['scroll' + prop]
+            : el[getBCR]()[property]
+      }
+      return goStyle(this, property, value)
+    }
+    each(['outer', 'inner'], function (i, name) {
+      Q.fn[name + prop] = function (includeMargins) {
+        var el = this[0]
+        return el && el[(!i ? 'offset' : 'client') + prop] + (includeMargins && !i ? float(getStyle(el, 'margin' + (id ? 'Top' : 'Left'))) + float(getStyle(el, 'margin' + (id ? 'Bottom' : 'Right'))) : 0)
+      }
+    })
+  })
 
   Q.inArray = function (value, array) { return array.indexOf(value) }
+  Q.isWindow = isWindow
   Q.type = isType
   Q.extend = extend
   Q.each = each
