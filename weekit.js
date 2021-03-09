@@ -4,6 +4,7 @@
 * Released under MIT license
 */
 (function (W, D, S) {
+  'use strict'
   var _ = {}
   var filter = [].filter
   var map = [].map
@@ -72,43 +73,53 @@
     return (el.currentStyle ? el.currentStyle : (W.getComputedStyle ? W.getComputedStyle(el, null) : el.style))[prop]
   }
   function getCompare (item) {
-    return !item ? function () {
-      return false
-    } : _.Str(item) ? function (i, ele) {
-      return isMatches(ele, item)
-    } : _.Fun(item) ? item : isSelf(item) ? function (i, ele) {
-      return item.is(ele)
-    } : function (i, ele) {
-      return ele === item
-    }
+    return !item ? false
+      : _.Fun(item) ? item
+        : _.Str(item) ? function (i, ele) {
+          return isMatches(ele, item)
+        } : isSelf(item) ? function (i, ele) {
+          return item.is(ele)
+        } : function (i, ele) {
+          return ele === item
+        }
   }
 
   function goStyle (obj, name, value) {
     if (!obj.length) return
     return _.Und(value) ? getStyle(obj[0], name) : each(obj, function (i, el) {
-      var addSufix = Q.inArray(name, addPx) ? 'px' : ''
+      var addSufix = Q.inArray(name, addPx) > -1 ? 'px' : ''
       el.style[name] = funcArg(el, value, i, getStyle(el, name)) + addSufix
     })
   }
 
   function goTo (obj, prop, selector, deep, until) {
     var group = []
-    var compare = until && getCompare(until)
-    map.call(obj, function (el, i) {
-      if (_.Fun(prop) || prop === children) {
-        push.apply(group, _.Fun(prop) ? prop(el) : filter.call(el[prop], function (el) { return isMatches(el, selector || '*') }))
-      } else {
-        el = el[prop]
-        while (el !== null) {
-          if (until && compare(-1, el)) break
-          if (isMatches(el, deep === 'closest' ? selector : selector || '*')) {
-            group.push(el)
-            if (deep === 'closest') break
+    var isUntil = until && getCompare(until)
+    var compare = getCompare(deep === 'closest' ? selector : selector || '*')
+    var applied = function (el, fn) {
+      return push.apply(group, fn || filter.call(el, function (ele, i) { return compare.call(ele, i, ele) }))
+    }
+    if (!prop) { // For Fn.Filter
+      applied(obj)
+    } else {
+      each(obj, function (i, el) {
+        if (_.Fun(prop)) {
+          applied(el, prop(el))
+        } else {
+          el = el[prop]
+          while (el !== null) {
+            if (until && isUntil(-1, el)) break
+            if (!_.Ele(el)) { // For Fn.Children
+              applied(el)
+            } else if (compare(i, el)) {
+              group.push(el)
+              if (deep === 'closest') break
+            }
+            el = deep ? el[prop] : null
           }
-          el = deep ? el[prop] : null
         }
-      }
-    })
+      })
+    }
     return Q(unique(flat(group)))
   }
 
@@ -153,7 +164,8 @@
   }
 
   function Init (el, context) { // el = selector, dom element or function
-    push.apply(this, el && (el.nodeType || el === W) ? [el] : _.Str(el) ? (isSelector(el) ? (isSelf(context) ? context[0] : D[s](context) || D)[sa](el) : parseHTML(el)) : el)
+    var ctx = context ? (isSelf(context) ? context[0] : context.nodeType ? Q(context)[0] : D[s](context)) : D
+    push.apply(this, el && (el.nodeType || el === W) ? [el] : _.Str(el) ? (isSelector(el) ? ctx[sa](el) : parseHTML(el)) : el)
   }
   function Q (el, context) { // el = selector, dom element or function
     return _.Fun(el) ? ready(el) : new Init(el, context)
@@ -182,14 +194,12 @@
       return each(this, callback)
     },
     map: function (callback) {
-      return unique(map.call(this, function (ele, i) {
+      return Q(concat.apply([], map.call(this, function (ele, i) {
         return callback.call(ele, i, ele)
-      }))
+      })))
     },
     filter: function (selector) {
-      return Q(filter.call(this, function (ele, i) {
-        return getCompare(selector).call(ele, i, ele)
-      }))
+      return goTo(this, false, selector)
     },
     add: function (selector, context) {
       return Q(unique(this.get().concat(Q(selector, context).get())))
@@ -210,7 +220,7 @@
       return _.Und(index) ? slice.call(this) : this[int(index) < 0 ? int(index) + this.length : int(index)]
     },
     index: function (selector) {
-      return indexOf.call(_.Und(selector) ? this[0].parentNode.children : this, _.Und(selector) ? this[0] : Q(selector)[0])
+      return indexOf.call(_.Und(selector) ? this[0][parent][children] : this, _.Und(selector) ? this[0] : Q(selector)[0])
     },
     size: function () {
       return this.length
@@ -220,12 +230,12 @@
     css: function (name, value) {
       var self = this
       var group = {}
-      if (_.Str(name)) return goStyle(self, name, value)
+      if (_.Str(name)) { return goStyle(self, name, value) }
       each(name, function (prop, val) {
         if (_.Obj(name)) goStyle(self, prop, val)
         else group[val] = goStyle(self, val) // An array of one or more CSS properties.
       })
-      return (_.Obj(name)) ? this : group
+      return _.Obj(name) ? self : group
     },
 
     // /////////*  MANIPULATION GROUP  *//////////////// //
@@ -246,7 +256,7 @@
     },
     remove: function (selector) { // selector : String
       this.each(function (i, el) {
-        if (isMatches(el, selector || '*')) { el.parentNode.removeChild(el) }
+        if (isMatches(el, selector || '*')) { el[parent].removeChild(el) }
       })
     },
     detach: function (selector) {
@@ -255,9 +265,7 @@
     },
     empty: function () {
       return this.each(function (i, el) {
-        while (el.lastChild) {
-          el.removeChild(el.lastChild)
-        }
+        el.textContent = ''
       })
     },
     wrap: function (selector) {
@@ -275,7 +283,7 @@
     },
     unwrap: function (selector) { // selector : String
       this.each(function (i, el) {
-        $(el).parent(selector).replaceWith(el)
+        Q(el).parent(selector).replaceWith(el)
       })
       return this
     },
@@ -301,7 +309,9 @@
     },
     find: function (selector) {
       return Q(flat(this.map(function (i, el) {
-        return slice.call(isSelector(selector) ? el[sa](selector) : selector)
+        return slice.call(isSelector(selector) ? el[sa](selector) : Q(selector).filter(function (i, ele) {
+          return el.contains(ele)
+        }))
       })))
     },
     children: function (selector) {
@@ -334,9 +344,11 @@
         return !getCompare(el).call(ele, i, ele)
       })
     },
-    siblings: function (el) {
-      return goTo(this, function (ele) {
-        return Q(ele).parent().children().not(ele)
+    siblings: function (selector) {
+      return goTo(this, function (el) {
+        return filter.call(el[parent][children], function (item) {
+          return item !== el && isMatches(item, selector || '*')
+        })
       })
     },
 
@@ -389,7 +401,7 @@
     }
     // 'appendTo', 'prependTo', 'insertBefore', 'insertAfter'
     Q.fn[type.indexOf('pend') > -1 ? type + 'To' : 'insert' + (type === 'after' ? 'After' : 'Before')] = function (html) {
-      $(html)[type](this)
+      Q(html)[type](this)
       return this
     }
   })
@@ -487,7 +499,7 @@
     })
   })
 
-  Q.inArray = function (value, array) { return array.indexOf(value) }
+  Q.inArray = function (value, array, index) { return indexOf.call(array, value, index) }
   Q.isWindow = isWindow
   Q.type = isType
   Q.extend = extend
