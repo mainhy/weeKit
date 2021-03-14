@@ -462,7 +462,7 @@
   goEach({ 'show': 'block', 'hide': 'none', 'toggle': [] }, function (type, prop) {
     Q.fn[type] = function (duration) {
       this.css({ 'visibility': 'initial', 'opacity': 1 })
-      this.each(function (i, el) {
+      return this.each(function (i, el) {
         el.style.display = _.Arr(prop) ? (getStyle(el, 'display') !== 'none' ? 'none' : 'block') : prop
       })
     }
